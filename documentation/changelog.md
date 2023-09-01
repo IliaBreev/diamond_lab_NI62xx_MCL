@@ -4,6 +4,7 @@
 
 Changes/New features:
 
+* Fixed inappropriate color range for saving xy scans with several channels in the confocal part
 * Added support for Keysight M8195A and M8190A AWGs.
 * Added functionality to simultaneously record multiple frequency ranges in the ODMR toolchain 
 in case the hardware supports it.
