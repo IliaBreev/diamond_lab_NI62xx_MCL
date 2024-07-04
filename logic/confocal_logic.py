@@ -257,6 +257,7 @@ class ConfocalLogic(GenericLogic):
     # declare connectors
     confocalscanner1 = Connector(interface='ConfocalScannerInterface')
     savelogic = Connector(interface='SaveLogic')
+    odmrcounter = Connector(interface='GenericLogic')
 
     # status vars
     _clock_frequency = StatusVar('clock_frequency', 500)
@@ -297,17 +298,20 @@ class ConfocalLogic(GenericLogic):
         self._scan_counter = 0
         self._zscan = False
         self._3Dscan = False
+        self._3DscanODMR = False
         self.stopRequested = False
         self.depth_scan_dir_is_xz = True
         self.depth_img_is_xz = True
         self.permanent_scan = False
+        self._odmr_counter = None
 
     def on_activate(self):
         """ Initialisation performed during activation of the module.
         """
         self._scanning_device = self.confocalscanner1()
         self._save_logic = self.savelogic()
-
+        self._odmr_counter = self.odmrcounter()
+        self._odmr_counter.set_cw_parameters(10000, 0)
         # Reads in the maximal scanning range. The unit of that scan range is micrometer!
         self.x_range = self._scanning_device.get_position_range()[0]
         self.y_range = self._scanning_device.get_position_range()[1]
@@ -410,6 +414,10 @@ class ConfocalLogic(GenericLogic):
             self._3Dscan = True
         else:
             self._3Dscan = False
+        if tag == '3DODMR':
+            self._3DscanODMR = True
+        else:
+            self._3DscanODMR = False
         if self._zscan:
             self._zscan_continuable = True
         else:
@@ -509,6 +517,22 @@ class ConfocalLogic(GenericLogic):
                 self._Z = np.linspace(z1, z2, max(self.z_resolution, 2))
                 self._ZL = self._Z
                 self._return_ZL = np.linspace(self._ZL[-1], self._ZL[0], self.return_slowness)
+            if self._3DscanODMR:
+                # Define the start and end frequencies and number of points for ODMR
+                start_frequency = self.odmr_start_frequency
+                end_frequency = self.odmr_end_frequency
+                num_points = self.odmr_num_points
+
+                # Checks if the frequency start and end values are ok
+                if end_frequency < start_frequency:
+                    self.log.error(
+                        'start_frequency must be smaller than end_frequency, but they are '
+                        '({0:.3f},{1:.3f}).'.format(start_frequency, end_frequency))
+                    return -1
+                # creates an array of evenly spaced frequencies over the interval
+                # start_frequency, end_frequency and the spacing is equal to num_points
+                self._ODMR_Frequencies = np.linspace(start_frequency, end_frequency, num_points)
+                self._ODMRL = self._ODMR_Frequencies
 
         self._XL = self._X
         self._YL = self._Y
@@ -588,6 +612,8 @@ class ConfocalLogic(GenericLogic):
 
             # in case of 3D xy scan, use the z-start as the z coordinate
             if self._3Dscan:
+                self.xy_image[:, :, 2] = z1 * np.ones((len(self._image_vert_axis), len(self._X)))
+            if self._3DscanODMR:
                 self.xy_image[:, :, 2] = z1 * np.ones((len(self._image_vert_axis), len(self._X)))
 
             self.sigImageXYInitialized.emit()
@@ -812,7 +838,7 @@ class ConfocalLogic(GenericLogic):
 
             # adjust z of line in image to current z before building the line
             # don't do that for 3D xy scan
-            if not self._zscan and not self._3Dscan:
+            if not self._zscan and not self._3Dscan and not self._3DscanODMR:
                 z_shape = image[self._scan_counter, :, 2].shape
                 image[self._scan_counter, :, 2] = self._current_z * np.ones(z_shape)
 
@@ -829,6 +855,8 @@ class ConfocalLogic(GenericLogic):
             # scan the line in the scan
             if self._3Dscan:
                 line_counts = self._scan_3d_line(line)
+            elif self._3DscanODMR:
+                line_counts = self._scan_3dODMR_line(line)
             else:
                 line_counts = self._scanning_device.scan_line(line, pixel_clock=True)
             if np.any(line_counts == -1):
@@ -929,6 +957,90 @@ class ConfocalLogic(GenericLogic):
             self.log.error('Given line_path list is not array type.')
             return np.array([[-1.]])
         x_len = line_path.shape[1]  # Number of points in x-scan
+
+        # Prepare a template for z-line scan path: number of samples per line is determined by Z resolution
+        zline = np.zeros((len(line_path), len(self._ZL)), dtype=np.float64)
+        zline[1, :] = np.ones(self._ZL.shape) * line_path[1, 0]  # Y coordinate is constant
+        zline[2, :] = self._ZL
+        if len(line_path) > 3:
+            zline[3, :] = np.ones(self._ZL.shape) * line_path[3, 0]
+
+        # Return line is similar to forward line, but differs in resolution given by self._return_ZL
+        return_zline = np.zeros((len(line_path), len(self._return_ZL)), dtype=np.float64)
+        return_zline[1, :] = np.ones(self._return_ZL.shape) * line_path[1, 0]  # Y coordinate is constant
+        return_zline[2, :] = self._return_ZL
+        if len(line_path) > 3:
+            return_zline[3, :] = np.ones(self._return_ZL.shape) * line_path[3, 0]
+
+        # Iterate through X coordinate in the x-line
+        for x_count in range(x_len):
+            # Make a Z scan line
+            # Fix X coordinate
+            zline[0, :] = line_path[0, x_count] * np.ones(self._ZL.shape)
+            # scan along Z
+            line_counts = self._scanning_device.scan_line(zline, pixel_clock=True)
+            if np.any(line_counts == -1):
+                return np.array([[-1.]])
+
+            # Initialize the output array on the first scan
+            if x_count == 0:
+                # Each column keeps counts for each scan channel, last column is for Z coordinate
+                all_data = np.zeros((x_len, len(line_counts[0, :])), dtype=np.float64)
+
+            # Save counts from middle of the Z range
+            all_data[x_count, :] = line_counts[len(self._ZL)//2, :]
+            # Overwrite the last column with Z coordinate from a fit of the first scan channel
+            all_data[x_count, -1] = self._maximizingZ(self._ZL, line_counts[:, 0])
+            if all_data[x_count, -1] == -1:
+                self.log.error('Fit of z-scan profile failed. Try to increase resolution along z direction.')
+                return np.array([[-1.]])
+
+            # Make a line to go to the starting position of the next Z scan line
+            # Fix X coordinate
+            return_zline[0, :] = line_path[0, x_count] * np.ones(self._return_ZL.shape)
+            # return the scanner to the start of next Z line, counts are thrown away
+            return_line_counts = self._scanning_device.scan_line(return_zline)
+            if np.any(return_line_counts == -1):
+                return np.array([[-1.]])
+
+        return all_data
+
+    def _scan_3dodmr_line(self, line_path=None):
+        """ Scan a line for 3D xy scan and return both the maximum counts at each XY coordinate
+        and the corresponding Z coordinate that gave the maximum count.
+        It is assumed that the current position is already the start position, so no gradual
+        scan line is made to the start position.
+
+        @param float[c, m] line_path: array of coordinate tuples defining the coordinate points:
+            m = samples per line, c enumerates xyza axis
+
+        @return float[m, n]: transposed array, where each column except last gives counts on a scan channel,
+        and the last column is overwritten with Z coordinate that gives the maximum count for the first scanner channel.
+        m is samples per X-line, n is number of scanner channels.
+        Returned counts are for the middle position of the Z scan range.
+
+        The input array looks for a 3D xy scan of 5x5 points at the position y=1, z=-2
+        like the following:
+            [ [1, 2, 3, 4, 5], [1, 1, 1, 1, 1], [-2, -2, -2, -2] ]
+        n is the number of scanner axes, which can vary. Typical values are 2 for galvo scanners,
+        3 for xyz scanners and 4 for xyz scanners with a special function on the a axis.
+        """
+        if not isinstance(line_path, (frozenset, list, set, tuple, np.ndarray, ) ):
+            self.log.error('Given line_path list is not array type.')
+            return np.array([[-1.]])
+        x_len = line_path.shape[1]  # Number of points in x-scan
+
+        # Checking if ODMR module is active
+        if self.odmr_module is None:
+            self.log.error('ODMR module is not available.')
+            return np.array([[-1.]])
+
+        # Prepare a template for ODMR line scan path
+        odmr_line = np.zeros((len(line_path), len(self._ODMR_Frequencies)), dtype=np.float64)
+        odmr_line[1, :] = np.ones(self._ODMR_Frequencies.shape) * line_path[1, 0]  # Y coordinate is constant
+        odmr_line[2, :] = self._ODMR_Frequencies
+        if len(line_path) > 3:
+            odmr_line[3, :] = np.ones(self._ODMR_Frequencies.shape) * line_path[3, 0]
 
         # Prepare a template for z-line scan path: number of samples per line is determined by Z resolution
         zline = np.zeros((len(line_path), len(self._ZL)), dtype=np.float64)

@@ -1449,6 +1449,7 @@
    <addaction name="action_scan_xy_resume"/>
    <addaction name="action_stop_scanning"/>
    <addaction name="action_scan_3d_start"/>
+   <addaction name="action_scan_3dODMR_start"/>
    <addaction name="action_scan_depth_start"/>
    <addaction name="action_scan_depth_resume"/>
    <addaction name="action_optimize_position"/>
@@ -2326,6 +2327,18 @@
    </property>
    <property name="toolTip">
     <string>Start a new 3D scan.</string>
+   </property>
+  </action>
+    <action name="action_scan_3dODMR_start">
+   <property name="icon">
+    <iconset>
+     <normaloff>../../artwork/icons/qudiTheme/22x22/scan-3D-start.png</normaloff>../../artwork/icons/qudiTheme/22x22/scan-3D-start.png</iconset>
+   </property>
+   <property name="text">
+    <string>Scan 3DODMR</string>
+   </property>
+   <property name="toolTip">
+    <string>Start a new 3DODMR scan.</string>
    </property>
   </action>
  </widget>

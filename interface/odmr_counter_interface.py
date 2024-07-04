@@ -68,6 +68,14 @@ class ODMRCounterInterface(metaclass=InterfaceMetaclass):
         pass
 
     @abstract_interface_method
+    def start_odmr_line_scan(self):
+        """ Starts an ODMR line scan and returns the necessary variables.
+
+        @return tuple: (start_frequency, stop_frequency, num_points, scan_data)
+        """
+        pass
+
+    @abstract_interface_method
     def count_odmr(self, length = 100):
         """ Sweeps the microwave and returns the counts on that sweep.
 
