@@ -42,9 +42,12 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
         gpib_timeout: 10
 
     """
-
-    _gpib_address = ConfigOption('gpib_address', missing='error')
-    _gpib_timeout = ConfigOption('gpib_timeout', 10, missing='warn')
+    # Changed gpib to usb-serial connection
+#    _gpib_address = ConfigOption('gpib_address', missing='error')
+#    _gpib_timeout = ConfigOption('gpib_timeout', 10, missing='warn')
+    _serial_port = ConfigOption('serial_port', missing='error')
+    _serial_timeout = ConfigOption('serial_timeout', 10, missing='warn')
+#    _channel = ConfigOption('output_channel', 0, missing='info')
 
     _internal_mode = 'cw'   # list and sweep might also be possible, but start
                             # always with cw
@@ -56,18 +59,28 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
     def on_activate(self):
         """ Initialisation performed during activation of the module. """
 
+        # Changed gpib to usb-serial connection
+        # trying to load the visa connection to the module
+#        self.rm = visa.ResourceManager()
+#        try:
+#            self._gpib_connection = self.rm.open_resource(
+#                                        self._gpib_address,
+#                                        timeout=self._gpib_timeout*1000)
+#        except:
+#            self.log.error('Could not connect to the GPIB address "{}". Check '
+#                           'whether address exists and reload '
+#                           'module!'.format(self._gpib_address))
+#            raise
 
         # trying to load the visa connection to the module
         self.rm = visa.ResourceManager()
-        try:
-            self._gpib_connection = self.rm.open_resource(
-                                        self._gpib_address,
-                                        timeout=self._gpib_timeout*1000)
-        except:
-            self.log.error('Could not connect to the GPIB address "{}". Check '
-                           'whether address exists and reload '
-                           'module!'.format(self._gpib_address))
-            raise
+        self._conn = self.rm.open_resource(
+            self._serial_port,
+            baud_rate=115200,
+            read_termination='\n',
+            write_termination='\n',
+            timeout=self._serial_timeout*1000
+        )
 
         message = self._ask('*IDN?').strip().split(',')
         self._BRAND = message[0]
@@ -129,6 +142,8 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
         if self._MODEL == 'SG392':
             limits.max_frequency = 2.025e9
         elif self._MODEL == 'SG394':
+            limits.max_frequency = 4.050e9
+        elif self._MODEL == 'SG384':
             limits.max_frequency = 4.050e9
         elif self._MODEL == 'SG396':
             limits.max_frequency = 6.075e9
@@ -236,7 +251,7 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
         """
 
         # delete a previously created list:
-        self._gpib_connection.write('LSTD')
+        self._write('LSTD')
 
         num_freq = len(frequency)
 
@@ -329,7 +344,8 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
             self._write('LSTE 1')
 
         self._internal_mode = 'list'    # now the device should be in list mode
-        curr_freq = self.get_frequency()
+        #curr_freq = self.get_frequency()
+        curr_freq = frequency
         curr_power = self.get_power()
 
         return curr_freq, curr_power, self._internal_mode
@@ -426,7 +442,9 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
 
         @return: the received answer
         """
-        return self._gpib_connection.query(question)
+        #Changed gpib to usb-serial connection
+#        return self._gpib_connection.query(question)
+        return self._conn.query(question)
 
     def _write(self, command, wait=True):
         """ Write wrapper.
@@ -436,9 +454,12 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
 
         @return: str: the statuscode of the write command.
         """
-        statuscode = self._gpib_connection.write(command)
+        # Changed gpib to usb-serial connection
+#        statuscode = self._gpib_connection.write(command)
+        statuscode = self._conn.write(command)
         if wait:
-            self._gpib_connection.write('*WAI')
+            #            self._gpib_connection.write('*WAI')
+            self._conn.write('*WAI')
         return statuscode
 
     def on(self):
