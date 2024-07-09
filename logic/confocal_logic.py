@@ -519,9 +519,12 @@ class ConfocalLogic(GenericLogic):
                 self._return_ZL = np.linspace(self._ZL[-1], self._ZL[0], self.return_slowness)
             if self._3DscanODMR:
                 # Define the start and end frequencies and number of points for ODMR
-                start_frequency = self.odmr_start_frequency
-                end_frequency = self.odmr_end_frequency
-                num_points = self.odmr_num_points
+                start_frequency = self._odmr_counter.mw_starts[0]
+                print("Проверка start_frequency: ", start_frequency)
+                end_frequency = self._odmr_counter.mw_stops[0]
+                print("Проверка end_frequency: ", end_frequency)
+                num_points = self._odmr_counter.mw_steps[0]
+                print("Проверка num_points: ", num_points)
 
                 # Checks if the frequency start and end values are ok
                 if end_frequency < start_frequency:
@@ -531,7 +534,8 @@ class ConfocalLogic(GenericLogic):
                     return -1
                 # creates an array of evenly spaced frequencies over the interval
                 # start_frequency, end_frequency and the spacing is equal to num_points
-                self._ODMR_Frequencies = np.linspace(start_frequency, end_frequency, num_points)
+                self._ODMR_Frequencies = np.arange(start_frequency, end_frequency + num_points, num_points) # np.linspace(start_frequency, end_frequency, num_points)
+                print("Проверка len(_ODMR_Frequencies): ", len(self._ODMR_Frequencies))
                 self._ODMRL = self._ODMR_Frequencies
 
         self._XL = self._X
@@ -1005,7 +1009,7 @@ class ConfocalLogic(GenericLogic):
 
         return all_data
 
-    def _scan_3dodmr_line(self, line_path=None):
+    def _scan_3dODMR_line(self, line_path=None):
         """ Scan a line for 3D xy scan and return both the maximum counts at each XY coordinate
         and the corresponding Z coordinate that gave the maximum count.
         It is assumed that the current position is already the start position, so no gradual
@@ -1031,38 +1035,28 @@ class ConfocalLogic(GenericLogic):
         x_len = line_path.shape[1]  # Number of points in x-scan
 
         # Checking if ODMR module is active
-        if self.odmr_module is None:
+        if self._odmr_counter is None:
             self.log.error('ODMR module is not available.')
             return np.array([[-1.]])
 
         # Prepare a template for ODMR line scan path
-        odmr_line = np.zeros((len(line_path), len(self._ODMR_Frequencies)), dtype=np.float64)
-        odmr_line[1, :] = np.ones(self._ODMR_Frequencies.shape) * line_path[1, 0]  # Y coordinate is constant
-        odmr_line[2, :] = self._ODMR_Frequencies
+        odmr_line = np.zeros((len(line_path), len(self._ODMRL)), dtype=np.float64)
+        odmr_line[1, :] = np.ones(self._ODMRL.shape) * line_path[1, 0]  # Y coordinate is constant
+        odmr_line[2, :] = self._ODMRL
         if len(line_path) > 3:
-            odmr_line[3, :] = np.ones(self._ODMR_Frequencies.shape) * line_path[3, 0]
-
-        # Prepare a template for z-line scan path: number of samples per line is determined by Z resolution
-        zline = np.zeros((len(line_path), len(self._ZL)), dtype=np.float64)
-        zline[1, :] = np.ones(self._ZL.shape) * line_path[1, 0]  # Y coordinate is constant
-        zline[2, :] = self._ZL
-        if len(line_path) > 3:
-            zline[3, :] = np.ones(self._ZL.shape) * line_path[3, 0]
-
-        # Return line is similar to forward line, but differs in resolution given by self._return_ZL
-        return_zline = np.zeros((len(line_path), len(self._return_ZL)), dtype=np.float64)
-        return_zline[1, :] = np.ones(self._return_ZL.shape) * line_path[1, 0]  # Y coordinate is constant
-        return_zline[2, :] = self._return_ZL
-        if len(line_path) > 3:
-            return_zline[3, :] = np.ones(self._return_ZL.shape) * line_path[3, 0]
+            odmr_line[3, :] = np.ones(self._ODMRL.shape) * line_path[3, 0]
 
         # Iterate through X coordinate in the x-line
         for x_count in range(x_len):
-            # Make a Z scan line
+            # Make an ODMR scan line
             # Fix X coordinate
-            zline[0, :] = line_path[0, x_count] * np.ones(self._ZL.shape)
-            # scan along Z
-            line_counts = self._scanning_device.scan_line(zline, pixel_clock=True)
+            odmr_line[0, :] = line_path[0, x_count] * np.ones(self._ODMRL.shape)
+            # scan along frequencies
+            self._odmr_counter._scan_odmr_line()
+            line_counts = self._odmr_counter.odmr_raw_data[0, :, :]
+            line_counts = line_counts.T
+            print("Проверка line_counts: ",  line_counts)
+            print("Проверка len(line_counts): ", len(line_counts))
             if np.any(line_counts == -1):
                 return np.array([[-1.]])
 
@@ -1071,21 +1065,16 @@ class ConfocalLogic(GenericLogic):
                 # Each column keeps counts for each scan channel, last column is for Z coordinate
                 all_data = np.zeros((x_len, len(line_counts[0, :])), dtype=np.float64)
 
-            # Save counts from middle of the Z range
-            all_data[x_count, :] = line_counts[len(self._ZL)//2, :]
-            # Overwrite the last column with Z coordinate from a fit of the first scan channel
-            all_data[x_count, -1] = self._maximizingZ(self._ZL, line_counts[:, 0])
+            # Save counts from middle of the ODMR range
+            print("Проверка len(self._ODMRL): ", len(self._ODMRL))
+            all_data[x_count, :] = line_counts[len(self._ODMRL)//2, :]
+            # Overwrite the last column with maximum ODMR difference of the first scan channel
+            all_data[x_count, -1] = (np.amax(line_counts[:, 1])-np.amin(line_counts[:, 1]))
             if all_data[x_count, -1] == -1:
-                self.log.error('Fit of z-scan profile failed. Try to increase resolution along z direction.')
+                self.log.error('Something went wrong with ODMR difference.')
                 return np.array([[-1.]])
-
-            # Make a line to go to the starting position of the next Z scan line
-            # Fix X coordinate
-            return_zline[0, :] = line_path[0, x_count] * np.ones(self._return_ZL.shape)
-            # return the scanner to the start of next Z line, counts are thrown away
-            return_line_counts = self._scanning_device.scan_line(return_zline)
-            if np.any(return_line_counts == -1):
-                return np.array([[-1.]])
+            self.set_position("scan", x=x_count)
+           # self._scanning_device.scanner_set_position(self, x=x_count)
 
         return all_data
 
