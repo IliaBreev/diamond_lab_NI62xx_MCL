@@ -311,7 +311,6 @@ class ConfocalLogic(GenericLogic):
         self._scanning_device = self.confocalscanner1()
         self._save_logic = self.savelogic()
         self._odmr_counter = self.odmrcounter()
-        self._odmr_counter.set_cw_parameters(10000, 0)
         # Reads in the maximal scanning range. The unit of that scan range is micrometer!
         self.x_range = self._scanning_device.get_position_range()[0]
         self.y_range = self._scanning_device.get_position_range()[1]
@@ -783,7 +782,7 @@ class ConfocalLogic(GenericLogic):
         if self.stopRequested:
             with self.threadlock:
                 # ------ Make a line from the end-scan position to the cursor position
-                if not self._zscan:
+                if not self._zscan and not self._3DscanODMR:
                     # Line at which scan was terminated
                     stop_line = self._scan_counter - 1
                     rs = self.return_slowness
@@ -796,6 +795,7 @@ class ConfocalLogic(GenericLogic):
                         start_line = np.vstack(
                             [lsx, lsy, lsz, np.ones(lsx.shape) * self._current_a])
                     # move to the start position of the scan, counts are thrown away
+                    print("Resetting scan counter1.")
                     self._scanning_device.scan_line(start_line)
                 else:
                     # ToDo: make a proper line for zscan instead of a jump
@@ -809,6 +809,7 @@ class ConfocalLogic(GenericLogic):
                 if self._zscan:
                     self._depth_line_pos = self._scan_counter
                 else:
+                    print("Resetting scan counter2.")
                     self._xy_line_pos = self._scan_counter
                 # add new history entry
                 new_history = ConfocalHistoryEntry(self)
@@ -860,6 +861,7 @@ class ConfocalLogic(GenericLogic):
             if self._3Dscan:
                 line_counts = self._scan_3d_line(line)
             elif self._3DscanODMR:
+                self._odmr_counter.set_matrix_line_number(number_of_lines=1)
                 line_counts = self._scan_3dODMR_line(line)
             else:
                 line_counts = self._scanning_device.scan_line(line, pixel_clock=True)
@@ -915,22 +917,26 @@ class ConfocalLogic(GenericLogic):
             else:
                 self.xy_image[self._scan_counter, :, 3:3 + s_ch] = line_counts
                 self.signal_xy_image_updated.emit()
-
-            # next line in scan
+            # Increment counter
             self._scan_counter += 1
+            print(f"Scan counter incremented: {self._scan_counter}")
 
-            # stop scanning when last line scan was performed and makes scan not continuable
+            # Check if last line
             if self._scan_counter >= np.size(self._image_vert_axis):
+                print("Reached the last line of the scan.")
                 if not self.permanent_scan:
+                    print("Stopping scan as it's not permanent.")
                     self.stop_scanning()
                     if self._zscan:
                         self._zscan_continuable = False
                     else:
                         self._xyscan_continuable = False
                 else:
+                    print("Resetting scan counter for permanent scan.")
                     self._scan_counter = 0
 
             self.signal_scan_lines_next.emit()
+            print("Emitted signal for next scan line.")
         except:
             self.log.exception('The scan went wrong, killing the scanner.')
             self.stop_scanning()
@@ -1050,12 +1056,11 @@ class ConfocalLogic(GenericLogic):
         for x_count in range(x_len):
             # Make an ODMR scan line
             # Fix X coordinate
+            print("Проверка x_count: ", x_count)
             odmr_line[0, :] = line_path[0, x_count] * np.ones(self._ODMRL.shape)
             # scan along frequencies
-            self._odmr_counter._scan_odmr_line()
-            line_counts = self._odmr_counter.odmr_raw_data[0, :, :]
-            line_counts = line_counts.T
-            print("Проверка line_counts: ",  line_counts)
+            line_counts = self._odmr_counter.scan_single_line_with_wait()
+            print("Проверка np.amax(line_counts): ",  np.amax(line_counts))
             print("Проверка len(line_counts): ", len(line_counts))
             if np.any(line_counts == -1):
                 return np.array([[-1.]])
