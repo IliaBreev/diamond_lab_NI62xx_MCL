@@ -617,7 +617,16 @@ class ConfocalLogic(GenericLogic):
             if self._3Dscan:
                 self.xy_image[:, :, 2] = z1 * np.ones((len(self._image_vert_axis), len(self._X)))
             if self._3DscanODMR:
-                self.xy_image[:, :, 2] = z1 * np.ones((len(self._image_vert_axis), len(self._X)))
+                self.xy_image = np.zeros((
+                    len(self._image_vert_axis),
+                    len(self._X),
+                    3 + len(self._ODMRL)
+                ))
+                self.xy_image[:, :, 0] = np.full(
+                    (len(self._image_vert_axis), len(self._X)), self._XL)
+                y_value_matrix = np.full((len(self._X), len(self._image_vert_axis)), self._Y)
+                self.xy_image[:, :, 1] = y_value_matrix.transpose()
+                self.xy_image[:, :, 2] = self._current_z * np.ones((len(self._image_vert_axis), len(self._X)))
 
             self.sigImageXYInitialized.emit()
         return 0
@@ -777,6 +786,8 @@ class ConfocalLogic(GenericLogic):
         image = self.depth_image if self._zscan else self.xy_image
         n_ch = len(self.get_scanner_axes())
         s_ch = len(self.get_scanner_count_channels())
+        if self._3DscanODMR:
+            s_ch = len(self._ODMRL)
 
         # stops scanning
         if self.stopRequested:
@@ -861,7 +872,6 @@ class ConfocalLogic(GenericLogic):
             if self._3Dscan:
                 line_counts = self._scan_3d_line(line)
             elif self._3DscanODMR:
-                self._odmr_counter.set_matrix_line_number(number_of_lines=1)
                 line_counts = self._scan_3dODMR_line(line)
             else:
                 line_counts = self._scanning_device.scan_line(line, pixel_clock=True)
@@ -1049,6 +1059,11 @@ class ConfocalLogic(GenericLogic):
         odmr_line = np.zeros((len(line_path), len(self._ODMRL)), dtype=np.float64)
         odmr_line[1, :] = np.ones(self._ODMRL.shape) * line_path[1, 0]  # Y coordinate is constant
         odmr_line[2, :] = self._ODMRL
+
+        xline = np.zeros((3, 2), dtype=np.float64)
+        xline[1, :] = np.ones(2) * line_path[1, 0]  # Y coordinate is constant
+        xline[2, :] = np.ones(2) * line_path[2, 0]  # Z coordinate is constant
+
         if len(line_path) > 3:
             odmr_line[3, :] = np.ones(self._ODMRL.shape) * line_path[3, 0]
 
@@ -1057,28 +1072,46 @@ class ConfocalLogic(GenericLogic):
             # Make an ODMR scan line
             # Fix X coordinate
             print("Проверка x_count: ", x_count)
+
+            xline[0, :] = line_path[0, x_count] * np.ones(2)
+            self._scanning_device.scan_line(xline, pixel_clock=True)
+
             odmr_line[0, :] = line_path[0, x_count] * np.ones(self._ODMRL.shape)
             # scan along frequencies
             line_counts = self._odmr_counter.scan_single_line_with_wait()
             print("Проверка np.amax(line_counts): ",  np.amax(line_counts))
             print("Проверка len(line_counts): ", len(line_counts))
+
+            # return the scanner to the start of next Z line, counts are thrown away
+            # self._scanning_device.scan_line(return_zline)
+
+            # self._current_x = line_path[0, x_count]
+            # self._change_position("scan")
+            # print("Проверка line_path[0, x_count]: ", line_path[0, x_count])
+            # print("Проверка self.get_position()[0]: ", self.get_position()[0])
+            # print("Проверка self.get_position()[1]: ", self.get_position()[1])
+
             if np.any(line_counts == -1):
                 return np.array([[-1.]])
 
             # Initialize the output array on the first scan
             if x_count == 0:
                 # Each column keeps counts for each scan channel, last column is for Z coordinate
-                all_data = np.zeros((x_len, len(line_counts[0, :])), dtype=np.float64)
+                all_data = np.zeros((x_len, len(line_counts[:, 0])), dtype=np.float64)
 
             # Save counts from middle of the ODMR range
             print("Проверка len(self._ODMRL): ", len(self._ODMRL))
-            all_data[x_count, :] = line_counts[len(self._ODMRL)//2, :]
+            all_data[x_count, :] = line_counts[:, 0]
+            all_data[x_count, 0] = np.average(line_counts[:, 0])
+            print("Проверка line_counts[len(self._ODMRL)//2, :]: ", line_counts[len(self._ODMRL)//2, :])
             # Overwrite the last column with maximum ODMR difference of the first scan channel
-            all_data[x_count, -1] = (np.amax(line_counts[:, 1])-np.amin(line_counts[:, 1]))
+            i = line_counts[:, 0]
+            j = i/np.amax(i)
+            all_data[x_count, 1] = np.amax([np.amax(j) - np.average(j), np.amin(j) - np.average(j)]) #(np.sum(line_counts[:, 0]/np.max(line_counts[:, 0]))/len(line_counts[:, 0])-np.median(line_counts[:, 0]/np.max(line_counts[:, 0])))
+            print("Проверка all_data[x_count, -1]: ", all_data[x_count, -1])
             if all_data[x_count, -1] == -1:
                 self.log.error('Something went wrong with ODMR difference.')
                 return np.array([[-1.]])
-            self.set_position("scan", x=x_count)
            # self._scanning_device.scanner_set_position(self, x=x_count)
 
         return all_data
@@ -1198,8 +1231,19 @@ class ConfocalLogic(GenericLogic):
         data['y position (m)'] = self.xy_image[:, :, 1].flatten()
         data['z position (m)'] = self.xy_image[:, :, 2].flatten()
 
-        for n, ch in enumerate(self.get_scanner_count_channels()):
-            data['count rate {0} (Hz)'.format(ch)] = self.xy_image[:, :, 3 + n].flatten()
+        channels = self.get_scanner_count_channels()
+        if self._3DscanODMR:
+            channels = self._ODMRL
+            parameters['ODMR image min'] = self._odmr_counter.mw_starts[0]
+            parameters['ODMR image max'] = self._odmr_counter.mw_stops[0]
+            parameters['ODMR image step'] = self._odmr_counter.mw_steps[0]
+            parameters['ODMR power'] = self._odmr_counter.sweep_mw_power
+            parameters['ODMR clock frequency'] = self._odmr_counter.clock_frequency
+            for n, ch in enumerate(channels):
+                data['{0} (Hz)'.format(ch)] = self.xy_image[:, :, 3 + n].flatten()
+        else:
+            for n, ch in enumerate(channels):
+                data['count rate {0} (Hz)'.format(ch)] = self.xy_image[:, :, 3 + n].flatten()
 
         # Save the raw data to file
         filelabel = 'confocal_xy_data'

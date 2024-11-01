@@ -28,6 +28,7 @@ import numpy as np
 import time
 import datetime
 import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
 
 from logic.generic_logic import GenericLogic
 from core.util.mutex import Mutex
@@ -1193,7 +1194,23 @@ class ODMRLogic(GenericLogic):
         line_counts = self.odmr_raw_data[0, :, :]
         i = self.stop_odmr_scan()
         print("Проверка stop_odmr_scan(): ", i)
-        return line_counts.T
+        sweep_count = self.odmr_raw_data.shape[0]
+        smoothed_spectrum = np.zeros(
+            [sweep_count,
+             len(self._odmr_counter.get_odmr_channels()),
+             self.odmr_plot_x.size])
+        for j in range(sweep_count):
+            print("Проверка self.odmr_raw_data[j, :, :].shape: ", self.odmr_raw_data[j, :, :].shape)
+            smoothed_spectrum[j, 0, :] = savgol_filter(self.odmr_raw_data[j, 0, :], window_length=5, polyorder=2)
+            smoothed_spectrum[j, 1, :] = savgol_filter(self.odmr_raw_data[j, 1, :], window_length=5, polyorder=2)
+            print("Проверка smoothed_spectrum[j, :, :]: ", smoothed_spectrum[j, :, :])
+
+        line_counts_processed = np.mean(
+            smoothed_spectrum[:max(1, min(self.lines_to_average, self.elapsed_sweeps)), :, :],
+            axis=0,
+            dtype=np.float64
+        )
+        return line_counts_processed.T
 
     def _wait_for_odmr_completion(self):
         """Wait until the ODMR scan is complete."""
@@ -1261,70 +1278,73 @@ class ODMRLogic(GenericLogic):
                 self.elapsed_sweeps = 0
                 self._startTime = time.time()
 
-            # reset position so every line starts from the same frequency
-            self.reset_sweep()
+            while self.elapsed_sweeps < estimated_number_of_lines - 1:
 
-            # Acquire count data
-            error, new_counts = self._odmr_counter.count_odmr(length=self.odmr_plot_x.size)
+                # reset position so every line starts from the same frequency
+                self.reset_sweep()
 
-            # Return counts as if the frequency list was ordered
-            if self._shuffle_active:
-                new_counts = new_counts[:, self.shuffle_order]
+                # Acquire count data
+                error, new_counts = self._odmr_counter.count_odmr(length=self.odmr_plot_x.size)
 
-            if error:
-                self.stopRequested = True
-                return
+                # Return counts as if the frequency list was ordered
+                if self._shuffle_active:
+                    new_counts = new_counts[:, self.shuffle_order]
 
-            # Add new count data to raw_data array and append if array is too small
-            if self._clearOdmrData:
-                self.odmr_raw_data[:, :, :] = 0
-                self._clearOdmrData = False
-            if self.elapsed_sweeps == (self.odmr_raw_data.shape[0] - 1):
-                expanded_array = np.zeros(self.odmr_raw_data.shape)
-                self.odmr_raw_data = np.concatenate((self.odmr_raw_data, expanded_array), axis=0)
-                self.log.warning('raw data array in ODMRLogic was not big enough for the entire '
-                                    'measurement. Array will be expanded.\nOld array shape was '
-                                    '({0:d}, {1:d}), new shape is ({2:d}, {3:d}).'
-                                    ''.format(self.odmr_raw_data.shape[0] - self.number_of_lines,
-                                            self.odmr_raw_data.shape[1],
-                                            self.odmr_raw_data.shape[0],
-                                            self.odmr_raw_data.shape[1]))
+                if error:
+                    self.stopRequested = True
+                    return
 
-            # shift data in the array "up" and add new data at the "bottom"
-            self.odmr_raw_data = np.roll(self.odmr_raw_data, 1, axis=0)
+                # Add new count data to raw_data array and append if array is too small
+                if self._clearOdmrData:
+                    self.odmr_raw_data[:, :, :] = 0
+                    self._clearOdmrData = False
+                if self.elapsed_sweeps == (self.odmr_raw_data.shape[0] - 1):
+                    expanded_array = np.zeros(self.odmr_raw_data.shape)
+                    self.odmr_raw_data = np.concatenate((self.odmr_raw_data, expanded_array), axis=0)
+                    self.log.warning('raw data array in ODMRLogic was not big enough for the entire '
+                                        'measurement. Array will be expanded.\nOld array shape was '
+                                        '({0:d}, {1:d}), new shape is ({2:d}, {3:d}).'
+                                        ''.format(self.odmr_raw_data.shape[0] - self.number_of_lines,
+                                                self.odmr_raw_data.shape[1],
+                                                self.odmr_raw_data.shape[0],
+                                                self.odmr_raw_data.shape[1]))
 
-            self.odmr_raw_data[0] = new_counts
+                # shift data in the array "up" and add new data at the "bottom"
+                self.odmr_raw_data = np.roll(self.odmr_raw_data, 1, axis=0)
 
-            # Add new count data to mean signal
-            if self._clearOdmrData:
-                self.odmr_plot_y[:, :] = 0
+                self.odmr_raw_data[0] = new_counts
 
-            if self.lines_to_average <= 0:
-                self.odmr_plot_y = np.mean(
-                    self.odmr_raw_data[:max(1, self.elapsed_sweeps), :, :],
-                    axis=0,
-                    dtype=np.float64
-                    )
-            else:
-                self.odmr_plot_y = np.mean(
-                    self.odmr_raw_data[:max(1, min(self.lines_to_average, self.elapsed_sweeps)), :, :],
+                # Add new count data to mean signal
+                if self._clearOdmrData:
+                    self.odmr_plot_y[:, :] = 0
+
+                if self.lines_to_average <= 0:
+                    self.odmr_plot_y = np.mean(
+                        self.odmr_raw_data[:max(1, self.elapsed_sweeps), :, :],
                         axis=0,
                         dtype=np.float64
-                    )
+                        )
+                else:
+                    self.odmr_plot_y = np.mean(
+                        self.odmr_raw_data[:max(1, min(self.lines_to_average, self.elapsed_sweeps)), :, :],
+                            axis=0,
+                            dtype=np.float64
+                        )
 
-            # Set plot slice of matrix
-            self.odmr_plot_xy = self.odmr_raw_data[:self.number_of_lines, :, :]
+                # Set plot slice of matrix
+                self.odmr_plot_xy = self.odmr_raw_data[:self.number_of_lines, :, :]
 
-            # Update elapsed time/sweeps
-            self.elapsed_sweeps += 1
-            self.elapsed_time = time.time() - self._startTime
-            print("Проверка self.elapsed_time: ", self.elapsed_time)
-            print("Проверка self.run_time: ", self.run_time)
+                # Update elapsed time/sweeps
+                self.elapsed_sweeps += 1
+                self.elapsed_time = time.time() - self._startTime
+                print("Проверка self.elapsed_time: ", self.elapsed_time)
+                print("Проверка self.run_time: ", self.run_time)
+
+                # Fire update signals
+                self.sigOdmrElapsedTimeUpdated.emit(self.elapsed_time, self.elapsed_sweeps)
+                self.sigOdmrPlotsUpdated.emit(self.odmr_plot_x, self.odmr_plot_y, self.odmr_plot_xy)
 
             self.stopRequested = True
-            # Fire update signals
-            self.sigOdmrElapsedTimeUpdated.emit(self.elapsed_time, self.elapsed_sweeps)
-            self.sigOdmrPlotsUpdated.emit(self.odmr_plot_x, self.odmr_plot_y, self.odmr_plot_xy)
 
             # Stop measurement if stop has been requested
             print("Проверка self.stopRequested: ", self.stopRequested)
@@ -1335,4 +1355,4 @@ class ODMRLogic(GenericLogic):
                 self.module_state.unlock()
                 return
 
-            return
+            return 1
