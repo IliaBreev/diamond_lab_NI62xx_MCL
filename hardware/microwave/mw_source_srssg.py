@@ -43,10 +43,10 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
 
     """
     # Changed gpib to usb-serial connection
-#    _gpib_address = ConfigOption('gpib_address', missing='error')
-#    _gpib_timeout = ConfigOption('gpib_timeout', 10, missing='warn')
-    _serial_port = ConfigOption('serial_port', missing='error')
-    _serial_timeout = ConfigOption('serial_timeout', 10, missing='warn')
+    _gpib_address = ConfigOption('gpib_address', missing='error')
+    _gpib_timeout = ConfigOption('gpib_timeout', 10, missing='warn')
+#    _serial_port = ConfigOption('serial_port', missing='error')
+#   _serial_timeout = ConfigOption('serial_timeout', 10, missing='warn')
 #    _channel = ConfigOption('output_channel', 0, missing='info')
 
     _internal_mode = 'cw'   # list and sweep might also be possible, but start
@@ -61,26 +61,27 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
 
         # Changed gpib to usb-serial connection
         # trying to load the visa connection to the module
-#        self.rm = visa.ResourceManager()
-#        try:
-#            self._gpib_connection = self.rm.open_resource(
-#                                        self._gpib_address,
-#                                        timeout=self._gpib_timeout*1000)
-#        except:
-#            self.log.error('Could not connect to the GPIB address "{}". Check '
-#                           'whether address exists and reload '
-#                           'module!'.format(self._gpib_address))
-#            raise
+        self.rm = visa.ResourceManager()
+        try:
+            self._gpib_connection = self.rm.open_resource(
+                                        self._gpib_address,
+                                        timeout=self._gpib_timeout*1000)
+        except:
+            self.log.error('Could not connect to the GPIB address "{}". Check '
+                           'whether address exists and reload '
+                           'module!'.format(self._gpib_address))
+            raise
 
         # trying to load the visa connection to the module
-        self.rm = visa.ResourceManager()
-        self._conn = self.rm.open_resource(
-            self._serial_port,
-            baud_rate=115200,
-            read_termination='\n',
-            write_termination='\n',
-            timeout=self._serial_timeout*1000
-        )
+#        self.rm = visa.ResourceManager()
+#        self._conn = self.rm.open_resource(
+#            self._serial_port,
+#            baud_rate=115200,
+#            read_termination='\n',
+#            write_termination='\n',
+#            timeout=self._serial_timeout*1000
+#        )
+        self._conn = self._gpib_connection
 
         message = self._ask('*IDN?').strip().split(',')
         self._BRAND = message[0]
@@ -217,7 +218,7 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
         # disable modulation:
         self._write('MODL 0')
         # and the subtype (analog,)
-        self._write('STYP 0')
+        #self._write('STYP 0')
 
         if frequency is not None:
             error = self.set_frequency(frequency)
@@ -374,7 +375,7 @@ class MicrowaveSRSSG(Base, MicrowaveInterface):
         # set the type
         self._write('MODL 3')
         # and the subtype
-        self._write('STYP 0')
+        #self._write('STYP 0')
 
         sweep_length = stop - start
         index = 0

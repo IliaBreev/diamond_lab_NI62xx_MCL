@@ -671,12 +671,6 @@ class ODMRLogic(GenericLogic):
             self._startTime = time.time()
             self.sigOdmrElapsedTimeUpdated.emit(self.elapsed_time, self.elapsed_sweeps)
 
-            odmr_status = self._start_odmr_counter()
-            if odmr_status < 0:
-                mode, is_running = self._mw_device.get_status()
-                self.sigOutputStateUpdated.emit(mode, is_running)
-                self.module_state.unlock()
-                return -1
 
             mode, is_running = self.mw_sweep_on()
             if not is_running:
@@ -719,12 +713,6 @@ class ODMRLogic(GenericLogic):
             self._startTime = time.time() - self.elapsed_time
             self.sigOdmrElapsedTimeUpdated.emit(self.elapsed_time, self.elapsed_sweeps)
 
-            odmr_status = self._start_odmr_counter()
-            if odmr_status < 0:
-                mode, is_running = self._mw_device.get_status()
-                self.sigOutputStateUpdated.emit(mode, is_running)
-                self.module_state.unlock()
-                return -1
 
             mode, is_running = self.mw_sweep_on()
             if not is_running:
@@ -770,7 +758,6 @@ class ODMRLogic(GenericLogic):
             if self.stopRequested:
                 self.stopRequested = False
                 self.mw_off()
-                self._stop_odmr_counter()
                 self.module_state.unlock()
                 return
 
@@ -779,11 +766,20 @@ class ODMRLogic(GenericLogic):
                 self.elapsed_sweeps = 0
                 self._startTime = time.time()
 
+            odmr_status = self._start_odmr_counter()
+            if odmr_status < 0:
+                mode, is_running = self._mw_device.get_status()
+                self.sigOutputStateUpdated.emit(mode, is_running)
+                self.module_state.unlock()
+                return -1
+
             # reset position so every line starts from the same frequency
             self.reset_sweep()
 
             # Acquire count data
             error, new_counts = self._odmr_counter.count_odmr(length=self.odmr_plot_x.size)
+
+            self._stop_odmr_counter()
 
             # Return counts as if the frequency list was ordered
             if self._shuffle_active:
@@ -1246,12 +1242,7 @@ class ODMRLogic(GenericLogic):
             self._startTime = time.time()
             self.sigOdmrElapsedTimeUpdated.emit(self.elapsed_time, self.elapsed_sweeps)
 
-            odmr_status = self._start_odmr_counter()
-            if odmr_status < 0:
-                mode, is_running = self._mw_device.get_status()
-                self.sigOutputStateUpdated.emit(mode, is_running)
-                self.module_state.unlock()
-                return -1
+
 
             mode, is_running = self.mw_sweep_on()
             if not is_running:
@@ -1282,9 +1273,15 @@ class ODMRLogic(GenericLogic):
 
                 # reset position so every line starts from the same frequency
                 self.reset_sweep()
-
+                odmr_status = self._start_odmr_counter()
+                if odmr_status < 0:
+                    mode, is_running = self._mw_device.get_status()
+                    self.sigOutputStateUpdated.emit(mode, is_running)
+                    self.module_state.unlock()
+                    return -1
                 # Acquire count data
                 error, new_counts = self._odmr_counter.count_odmr(length=self.odmr_plot_x.size)
+                self._stop_odmr_counter()
 
                 # Return counts as if the frequency list was ordered
                 if self._shuffle_active:
@@ -1351,7 +1348,7 @@ class ODMRLogic(GenericLogic):
             if self.stopRequested:
                 self.stopRequested = False
                 self.mw_off()
-                self._stop_odmr_counter()
+
                 self.module_state.unlock()
                 return
 

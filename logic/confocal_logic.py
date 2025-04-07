@@ -1107,7 +1107,18 @@ class ConfocalLogic(GenericLogic):
             # Overwrite the last column with maximum ODMR difference of the first scan channel
             i = line_counts[:, 0]
             j = i/np.amax(i)
-            all_data[x_count, 1] = np.amax([np.amax(j) - np.average(j), np.amin(j) - np.average(j)]) #(np.sum(line_counts[:, 0]/np.max(line_counts[:, 0]))/len(line_counts[:, 0])-np.median(line_counts[:, 0]/np.max(line_counts[:, 0])))
+            temp = np.amax([np.amax(j) - np.average(j), np.average(j) - np.amin(j)])
+            if np.amax(j) - np.average(j) >= np.average(j) - np.amin(j):
+                temp1 = np.amax(j) - np.average(j)
+            else:
+                temp1 = np.amin(j) - np.average(j)
+            absnoise = np.sqrt(np.average(i) * self._odmr_counter.clock_frequency / self._odmr_counter.lines_to_average)
+            relnoise = absnoise / np.average(i)
+            if temp >= 3 * relnoise:
+                all_data[x_count, 1] = temp1
+            else:
+                all_data[x_count, 1] = 0
+            #all_data[x_count, 1] = np.amax([np.amax(j) - np.average(j), np.amin(j) - np.average(j)]) #(np.sum(line_counts[:, 0]/np.max(line_counts[:, 0]))/len(line_counts[:, 0])-np.median(line_counts[:, 0]/np.max(line_counts[:, 0])))
             print("Проверка all_data[x_count, -1]: ", all_data[x_count, -1])
             if all_data[x_count, -1] == -1:
                 self.log.error('Something went wrong with ODMR difference.')

@@ -21,6 +21,7 @@ top-level directory of this distribution and at <https://github.com/Ulm-IQO/qudi
 """
 
 import numpy as np
+import time
 
 from core.connector import Connector
 from logic.generic_logic import GenericLogic
@@ -47,6 +48,7 @@ class ODMRCounterMicrowaveInterfuse(GenericLogic, ODMRCounterInterface,
         self._lock_in_active = False
         self._oversampling = 10
         self._odmr_length = 100
+        self._clock_frequency = 20
 
 
     def on_activate(self):
@@ -71,6 +73,7 @@ class ODMRCounterMicrowaveInterfuse(GenericLogic, ODMRCounterInterface,
         @return int: error code (0:OK, -1:error)
         """
         print("Setting up ODMR clock")
+        self._clock_frequency = clock_frequency
         return self._sc_device.set_up_clock(clock_frequency=clock_frequency,
                                                    clock_channel=clock_channel)
 
@@ -121,13 +124,63 @@ class ODMRCounterMicrowaveInterfuse(GenericLogic, ODMRCounterInterface,
         @return float[]: the photon counts per second
         """
 
-        counts = np.zeros((len(self.get_odmr_channels()), length))
-        # self.trigger()
-        for i in range(length):
+        signal = np.zeros((len(self.get_odmr_channels()), length))
+
+        if self._lock_in_active:
+            for i in range(length):
+                self.trigger()
+                t1 = time.time()
+                print("Проверка i ", i)
+                accumulated_lockin_counts = np.zeros(len(self.get_odmr_channels()))
+                for _ in range(self._oversampling):
+
+
+                    self.list_on()
+
+                    # **Modified section: Get 5 samples in one go, use the LAST value**
+                    on_counts_array = self._sc_device.get_counter(samples=1)  # Get 5 samples at once
+                    on_counts = np.zeros(len(self.get_odmr_channels()))  # Initialize on_counts for assignment
+                    for chan_index in range(len(self.get_odmr_channels())):  # Loop through channels
+                        on_counts[chan_index] = on_counts_array[chan_index, -1]  # Take last sample for each channel
+                    print("Проверка on_counts[0] ", on_counts[0])
+
+                    self.off()
+
+                    # **Modified section: Get 5 samples in one go, use the LAST value**
+                    off_counts_array = self._sc_device.get_counter(samples=1)  # Get 5 samples at once
+                    off_counts = np.zeros(len(self.get_odmr_channels()))  # Initialize off_counts for assignment
+                    for chan_index in range(len(self.get_odmr_channels())):  # Loop through channels
+                        off_counts[chan_index] = off_counts_array[chan_index, -1]  # Take last sample for each channel
+                    print("Проверка off_counts[0] ", off_counts[0])
+
+
+                    accumulated_lockin_counts += on_counts - off_counts
+
+
+                signal[:, i] = accumulated_lockin_counts / self._oversampling
+                print("Проверка step time: ", time.time() - t1)
             self.trigger()
-            counts[:, i] = self._sc_device.get_counter(samples=1)[:, 0]
-        self.trigger()
-        return False, counts
+        else:
+            for i in range(length):
+                t1 = time.time()
+                self.trigger()
+                t2 = time.time()
+                print("Проверка trigger time: ", time.time() - t2)
+                print("Проверка self._clock_frequency: ", self._clock_frequency)
+                #time.sleep(1.0 / self._clock_frequency)
+                print("Проверка sleep time: ", 1.0 / self._clock_frequency)
+                signal[:, i] = np.zeros(len(self.get_odmr_channels()))  # Initialize signal
+                # **Modified section: Get 5 samples in one go, use the LAST value**
+                counts_array = self._sc_device.get_counter(samples=1)  # Get 5 samples at once
+                print("Проверка step time: ", time.time() - t1)
+                # **Corrected loop for non-lock-in case:**
+                for chan_index in range(len(self.get_odmr_channels())):
+                    signal[chan_index, i] = counts_array[chan_index, -1]  # Take last sample for each channel
+#            for i in range(length):
+#                self.trigger()
+#                signal[:, i] = self._sc_device.get_counter(samples=1)[:, 0]
+            self.trigger()
+        return False, signal
 
     def close_odmr(self):
         """ Close the odmr and clean up afterwards.
